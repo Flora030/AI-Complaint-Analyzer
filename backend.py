@@ -27,6 +27,12 @@ from pydantic import BaseModel, Field, ValidationError
 from dotenv import load_dotenv
 load_dotenv()
 
+# ADD THIS (database import)
+from database import init_db, save_complaint
+
+# ADD THIS (initialize database)
+init_db()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -55,7 +61,6 @@ class AnalysisResponse(BaseModel):
     response: str
 
 
-# JSON schema the model is constrained to. Requires Ollama >= 0.5.0.
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -96,7 +101,6 @@ app = FastAPI(title="AI Complaint Analyzer", version="1.0.0")
 
 @app.get("/health")
 async def health() -> dict:
-    """Probe Ollama and report whether the configured model is pulled."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
@@ -123,7 +127,6 @@ async def health() -> dict:
 
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze(req: ComplaintRequest) -> AnalysisResponse:
-    """Send the complaint to Ollama and return validated structured output."""
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
@@ -171,6 +174,16 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
             status_code=502,
             detail=f"Model did not return valid JSON. First 200 chars: {raw[:200]}",
         )
+
+    # ADD THIS (save to database)
+    save_complaint({
+        "complaint": req.complaint,
+        "summary": parsed["summary"],
+        "category": parsed["category"],
+        "severity": parsed["severity"],
+        "sentiment": parsed["sentiment"],
+        "response": parsed["response"]
+    })
 
     try:
         return AnalysisResponse(**parsed)
