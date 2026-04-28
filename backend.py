@@ -47,6 +47,7 @@ class ComplaintRequest(BaseModel):
     complaint: str = Field(..., min_length=1, max_length=5000)
 
 class AnalysisResponse(BaseModel):
+    id: int
     summary: str
     category: Category
     severity: Severity
@@ -172,8 +173,8 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
             status_code=502,
             detail=f"Model did not return valid JSON. First 200 chars: {raw[:200]}",
         )
-
-    save_complaint({
+    
+    complaint_id = save_complaint({
         "complaint": req.complaint,
         "summary": parsed["summary"],
         "category": parsed["category"],
@@ -181,10 +182,16 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
         "sentiment": parsed["sentiment"],
         "response": parsed["response"]
     })
+    #print("complaint id", complaint_id)
+
+    parsed["id"] = complaint_id
+    #print("parsed", parsed)
 
     try:
+        #print("AnalysisResponse(**parsed)", AnalysisResponse(**parsed))
         return AnalysisResponse(**parsed)
     except ValidationError as e:
+        #print("In exception")
         log.error("Model JSON failed schema validation: %s", e)
         raise HTTPException(
             status_code=502,

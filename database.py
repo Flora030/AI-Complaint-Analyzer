@@ -20,9 +20,6 @@ def init_db():
     conn.close()
 
 def save_complaint(data):
-    #print("Saving complaint to DB:", data)
-    response_to_save = data.get("response", "No response provided.")
-    
     conn = sqlite3.connect("complaints.db")
     cursor = conn.cursor()
 
@@ -35,11 +32,14 @@ def save_complaint(data):
         data["category"],
         data["severity"],
         data["sentiment"],
-        response_to_save
+        data["response"]
     ))
 
     conn.commit()
+
+    complaint_id = cursor.lastrowid
     conn.close()
+    return complaint_id
 
 def clear_complaints():
     try:

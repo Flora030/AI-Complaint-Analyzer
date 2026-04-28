@@ -133,6 +133,7 @@ def fetch_complaints():
 
         cursor.execute("SELECT * FROM complaints ORDER BY id DESC")
         rows = cursor.fetchall()
+        #print("ROWS:", rows)
 
         conn.close()
 
@@ -211,6 +212,27 @@ with tab1:
     with b3:
         st.markdown("<div class='card'><b>Consistent Responses</b><br>Helps customer service teams provide professional and standardized replies.</div>", unsafe_allow_html=True)
 
+def update_complaint(data):
+    conn = sqlite3.connect("complaints.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    UPDATE complaints
+    SET complaint = ?, summary = ?, category = ?, severity = ?, sentiment = ?, response = ?
+    WHERE id = ?
+    """, (
+        data["complaint"],
+        data["summary"],
+        data["category"],
+        data["severity"],
+        data["sentiment"],
+        data["response"],
+        data["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
 # Analyze Tab
 with tab2:
     st.markdown('<div class="section-title">Analyze a New Complaint</div>', unsafe_allow_html=True)
@@ -233,16 +255,16 @@ with tab2:
         else:
             with st.spinner("Processing complaint..."):
                 result, source = analyze_complaint(complaint)
+            
             st.session_state["analysis_result"] = result
             st.session_state["analysis_source"] = source
             st.session_state["analysis_complaint"] = complaint
-
-            # Resetting the session state for edited_response after analyzing a new complaint
+            st.session_state["analysis_result_id"] = result.get("id", None) 
+            
             if "edited_response" in st.session_state:
                 del st.session_state["edited_response"]
 
-            # Set the AI response as the default in case of a new complaint
-            st.session_state["edited_response"] = result.get("response", "")  # AI response as default
+            st.session_state["edited_response"] = result.get("response", "")
 
     if "analysis_result" in st.session_state:
         result = st.session_state["analysis_result"]
@@ -273,6 +295,7 @@ with tab2:
         st.markdown(f"<div class='card'><b>Suggested Customer Response</b><br>{result.get('response', 'No response generated.')}</div>", unsafe_allow_html=True)
 
         st.markdown("### Human Review")
+
         edited_response = st.text_area(
             "Support agent can edit the AI response before sending", 
             value=st.session_state["edited_response"], 
@@ -282,23 +305,28 @@ with tab2:
         )
 
         if st.button("Save Reviewed Response", width="stretch"):
-            # Ensure only the edited response is saved
             saved_data = {
+                "id": st.session_state.get("analysis_result_id", ""), 
                 "complaint": st.session_state.get("analysis_complaint", ""),
                 "summary": result.get("summary"),
                 "category": result.get("category"),
                 "severity": result.get("severity"),
                 "sentiment": result.get("sentiment"),
-                "response": edited_response  # Save the human-edited response
+                "response": edited_response  
             }
-            save_complaint(saved_data)  
-            st.toast("Reviewed response saved.", icon="✅")
+
+            if saved_data["id"]: 
+                update_complaint(saved_data)
+                st.toast("Reviewed response saved.", icon="✅")
+            else:
+                st.error("Unable to save, no complaint ID found.")
 
 # History Tab
 with tab3:
     st.markdown('<div class="section-title">Recent Complaint History</div>', unsafe_allow_html=True)
 
     history_data = fetch_complaints()
+    #print("History Data:", history_data)
     
     status_filter = st.selectbox("Filter by status", ["All", "Needs Review", "In Progress", "Resolved"])
 
