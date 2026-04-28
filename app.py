@@ -1,8 +1,9 @@
 import os
-
 import pandas as pd
 import requests
 import streamlit as st
+from database import save_complaint
+import sqlite3
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
@@ -11,9 +12,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# -------------------------
-# Custom Styling
-# -------------------------
 st.markdown("""
 <style>
 .header-container {
@@ -89,9 +87,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------
-# Header
-# -------------------------
 st.markdown("""
 <div class="header-container">
     <div class="main-title">AI Complaint Analyzer</div>
@@ -103,66 +98,24 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# -------------------------
-# Demo Data
-# -------------------------
-history_data = pd.DataFrame({
-    "Complaint ID": ["C001", "C002", "C003", "C004", "C005", "C006"],
-    "Category": ["Delivery", "Product", "Payment", "Service", "Delivery", "Product"],
-    "Severity": ["High", "Medium", "High", "Low", "Medium", "High"],
-    "Sentiment": ["Negative", "Negative", "Negative", "Neutral", "Negative", "Negative"],
-    "Status": ["Needs Review", "Resolved", "Needs Review", "Resolved", "In Progress", "Needs Review"],
-})
-
-category_data = pd.DataFrame({
-    "Category": ["Delivery", "Product", "Payment", "Service"],
-    "Complaints": [45, 32, 18, 33],
-})
-
-severity_data = pd.DataFrame({
-    "Severity": ["Low", "Medium", "High"],
-    "Count": [52, 52, 24],
-})
-
-
-# -------------------------
-# Backend call
-# -------------------------
+# Backend call for analyzing complaint
 def analyze_complaint(complaint_text: str) -> tuple[dict, str]:
-    """
-    Call the FastAPI backend.
-
-    Returns (result_dict, source) where source is "live" if the backend
-    answered or "fallback" if we filled in demo data because the backend
-    is unreachable. The caller surfaces the source to the user.
-    """
     try:
-        r = requests.post(
-            f"{BACKEND_URL}/analyze",
-            json={"complaint": complaint_text},
-            timeout=180,
-        )
+        r = requests.post(f"{BACKEND_URL}/analyze", json={"complaint": complaint_text}, timeout=180)
         if r.status_code == 200:
             return r.json(), "live"
-
-        # Backend reached but returned an error. Show the real reason.
         try:
             detail = r.json().get("detail", r.text)
         except ValueError:
             detail = r.text
         st.error(f"Backend returned {r.status_code}: {detail}")
         return _fallback_result(), "fallback"
-
     except requests.exceptions.ConnectionError:
-        st.error(
-            f"Cannot reach the backend at {BACKEND_URL}. "
-            "Make sure `uvicorn backend:app --port 8000` is running and Ollama is started."
-        )
+        st.error(f"Cannot reach the backend at {BACKEND_URL}. Make sure `uvicorn backend:app --port 8000` is running and Ollama is started.")
         return _fallback_result(), "fallback"
     except requests.exceptions.Timeout:
         st.error("Backend request timed out. Try a smaller model or increase REQUEST_TIMEOUT.")
         return _fallback_result(), "fallback"
-
 
 def _fallback_result() -> dict:
     return {
@@ -170,70 +123,95 @@ def _fallback_result() -> dict:
         "category": "Delivery",
         "severity": "High",
         "sentiment": "Negative",
-        "response": (
-            "We apologize for the delay and understand your frustration. "
-            "We are investigating your order and can issue a refund or replacement if needed."
-        ),
+        "response": "We apologize for the delay and understand your frustration. We are investigating your order and can issue a refund or replacement if needed."
     }
 
+def fetch_complaints():
+    try:
+        conn = sqlite3.connect("complaints.db") 
+        cursor = conn.cursor()
 
-# -------------------------
-# Tabs
-# -------------------------
+        cursor.execute("SELECT * FROM complaints ORDER BY id DESC")
+        rows = cursor.fetchall()
+
+        conn.close()
+
+        complaints = [
+            {
+                "id": row[0],
+                "complaint": row[1],
+                "summary": row[2],
+                "category": row[3],
+                "severity": row[4],
+                "sentiment": row[5],
+                "response": row[6],
+            }
+            for row in rows
+        ]
+
+        return complaints
+
+    except sqlite3.Error as e:
+        st.error(f"Database error: {e}")
+        return []
+    
+# Tabs for Dashboard, Analyze Complaint, History
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Analyze Complaint", "Complaint History"])
 
-# -------------------------
+history_data = fetch_complaints()
+#print("145 Complaints History:", history_data)
+total_complaints = len(history_data)
+high_severity = sum(1 for complaint in history_data if complaint['severity'] == 'High')
+negative_sentiment = sum(1 for complaint in history_data if complaint['sentiment'] == 'Negative')
+avg_time_saved = 3 
+
 # Dashboard Tab
-# -------------------------
 with tab1:
     st.markdown('<div class="section-title">Complaint Dashboard</div>', unsafe_allow_html=True)
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Complaints", "128")
-    col2.metric("High Severity", "24", "+8 today")
-    col3.metric("Negative Sentiment", "71%")
-    col4.metric("Avg Time Saved", "3 min")
+    col1.metric("Total Complaints", str(total_complaints))
+    col2.metric("High Severity", str(high_severity))  
+    if total_complaints > 0:
+        negative_sentiment_percentage = (negative_sentiment / total_complaints) * 100
+    else:
+        negative_sentiment_percentage = 0 
+    col3.metric("Negative Sentiment", f"{negative_sentiment_percentage:.2f}%")
+    col4.metric("Avg Time Saved", f"{avg_time_saved} min")  
 
     st.divider()
 
     left_chart, right_chart = st.columns(2)
     with left_chart:
         st.markdown("### Complaints by Category")
-        st.bar_chart(category_data.set_index("Category"))
+        # Category count
+        category_counts = pd.DataFrame({
+            "Category": ["Delivery", "Product", "Payment", "Service"],
+            "Complaints": [sum(1 for complaint in history_data if complaint['category'] == category) for category in ["Delivery", "Product", "Payment", "Service"]],
+        }).set_index("Category")
+        st.bar_chart(category_counts)
+    
     with right_chart:
         st.markdown("### Severity Breakdown")
-        st.bar_chart(severity_data.set_index("Severity"))
+        # Severity count
+        severity_counts = pd.DataFrame({
+            "Severity": ["Low", "Medium", "High"],
+            "Count": [sum(1 for complaint in history_data if complaint['severity'] == severity) for severity in ["Low", "Medium", "High"]],
+        }).set_index("Severity")
+        st.bar_chart(severity_counts)
 
     st.divider()
 
     st.markdown('<div class="section-title">Business Impact</div>', unsafe_allow_html=True)
     b1, b2, b3 = st.columns(3)
     with b1:
-        st.markdown("""
-        <div class="card">
-            <b>Faster Processing</b><br>
-            Reduces the time support teams spend manually reading and categorizing complaints.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div class='card'><b>Faster Processing</b><br>Reduces the time support teams spend manually reading and categorizing complaints.</div>", unsafe_allow_html=True)
     with b2:
-        st.markdown("""
-        <div class="card">
-            <b>Better Prioritization</b><br>
-            Flags high-severity complaints so urgent customer issues can be handled first.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div class='card'><b>Better Prioritization</b><br>Flags high-severity complaints so urgent customer issues can be handled first.</div>", unsafe_allow_html=True)
     with b3:
-        st.markdown("""
-        <div class="card">
-            <b>Consistent Responses</b><br>
-            Helps customer service teams provide professional and standardized replies.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div class='card'><b>Consistent Responses</b><br>Helps customer service teams provide professional and standardized replies.</div>", unsafe_allow_html=True)
 
-
-# -------------------------
 # Analyze Tab
-# -------------------------
 with tab2:
     st.markdown('<div class="section-title">Analyze a New Complaint</div>', unsafe_allow_html=True)
 
@@ -247,27 +225,25 @@ with tab2:
 
     selected_example = st.selectbox("Sample complaint", list(example_complaints.keys()))
 
-    complaint = st.text_area(
-        "Enter customer complaint",
-        value=example_complaints[selected_example],
-        height=170,
-        placeholder="Type or paste a customer complaint here...",
-        key="complaint_input",
-    )
+    complaint = st.text_area("Enter customer complaint", value=example_complaints[selected_example], height=170, placeholder="Type or paste a customer complaint here...", key="complaint_input")
 
-    if st.button("Analyze Complaint", use_container_width=True):
+    if st.button("Analyze Complaint", width="stretch"):
         if not complaint.strip():
             st.warning("Please enter a complaint.")
         else:
             with st.spinner("Processing complaint..."):
                 result, source = analyze_complaint(complaint)
-            # Persist across reruns so the result survives later widget interactions.
             st.session_state["analysis_result"] = result
             st.session_state["analysis_source"] = source
             st.session_state["analysis_complaint"] = complaint
 
-    # Render results from session_state, not from the click branch, so they
-    # survive reruns triggered by editing the response or clicking Save.
+            # Resetting the session state for edited_response after analyzing a new complaint
+            if "edited_response" in st.session_state:
+                del st.session_state["edited_response"]
+
+            # Set the AI response as the default in case of a new complaint
+            st.session_state["edited_response"] = result.get("response", "")  # AI response as default
+
     if "analysis_result" in st.session_state:
         result = st.session_state["analysis_result"]
         source = st.session_state["analysis_source"]
@@ -275,10 +251,7 @@ with tab2:
         if source == "live":
             st.success("Analysis complete")
         else:
-            st.markdown(
-                '<div class="demo-banner">Showing fallback demo data because the backend is unreachable.</div>',
-                unsafe_allow_html=True,
-            )
+            st.markdown('<div class="demo-banner">Showing fallback demo data because the backend is unreachable.</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="section-title">AI Analysis Results</div>', unsafe_allow_html=True)
 
@@ -294,86 +267,45 @@ with tab2:
             "Low": "badge-low",
         }.get(severity, "badge-low")
 
-        st.markdown(
-            f'<p><span class="{badge_class}">Severity: {severity}</span></p>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<p><span class="{badge_class}">Severity: {severity}</span></p>', unsafe_allow_html=True)
 
-        st.markdown(
-            f"""
-            <div class="card">
-                <b>Complaint Summary</b><br>
-                {result.get("summary", "No summary generated.")}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f"""
-            <div class="card">
-                <b>Suggested Customer Response</b><br>
-                {result.get("response", "No response generated.")}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<div class='card'><b>Complaint Summary</b><br>{result.get('summary', 'No summary generated.')}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='card'><b>Suggested Customer Response</b><br>{result.get('response', 'No response generated.')}</div>", unsafe_allow_html=True)
 
         st.markdown("### Human Review")
         edited_response = st.text_area(
-            "Support agent can edit the AI response before sending",
-            value=result.get("response", ""),
-            height=130,
-            key="edited_response",
+            "Support agent can edit the AI response before sending", 
+            value=st.session_state["edited_response"], 
+            height=130, 
+            key="edited_response", 
+            width="stretch"
         )
 
-        if st.button("Save Reviewed Response", use_container_width=True):
-            # In a real deployment this would write to a database / ticketing system.
-            st.session_state.setdefault("saved_responses", []).append({
+        if st.button("Save Reviewed Response", width="stretch"):
+            # Ensure only the edited response is saved
+            saved_data = {
                 "complaint": st.session_state.get("analysis_complaint", ""),
+                "summary": result.get("summary"),
                 "category": result.get("category"),
                 "severity": result.get("severity"),
-                "final_response": edited_response,
-            })
+                "sentiment": result.get("sentiment"),
+                "response": edited_response  # Save the human-edited response
+            }
+            save_complaint(saved_data)  
             st.toast("Reviewed response saved.", icon="✅")
 
-
-# -------------------------
 # History Tab
-# -------------------------
 with tab3:
     st.markdown('<div class="section-title">Recent Complaint History</div>', unsafe_allow_html=True)
 
-    status_filter = st.selectbox(
-        "Filter by status",
-        ["All", "Needs Review", "In Progress", "Resolved"],
-    )
+    history_data = fetch_complaints()
+    
+    status_filter = st.selectbox("Filter by status", ["All", "Needs Review", "In Progress", "Resolved"])
 
     filtered_data = (
         history_data
         if status_filter == "All"
-        else history_data[history_data["Status"] == status_filter]
+        else [complaint for complaint in history_data if complaint['status'] == status_filter]
     )
 
-    st.dataframe(filtered_data, use_container_width=True)
-
-    saved = st.session_state.get("saved_responses", [])
-    if saved:
-        st.markdown('<div class="section-title">Saved Reviewed Responses (this session)</div>', unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(saved), use_container_width=True)
-
-    st.divider()
-
-    st.markdown('<div class="section-title">Evaluation Preview</div>', unsafe_allow_html=True)
-
-    eval_data = pd.DataFrame({
-        "Metric": ["Category Accuracy", "Severity Accuracy", "Sentiment Accuracy"],
-        "Result": ["85%", "80%", "90%"],
-        "Evaluation Method": [
-            "Compared AI category to manual label",
-            "Compared AI severity to manual label",
-            "Compared AI sentiment to manual label",
-        ],
-    })
-
-    st.dataframe(eval_data, use_container_width=True)
+    st.dataframe(pd.DataFrame(filtered_data), use_container_width=True)

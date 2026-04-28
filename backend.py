@@ -15,22 +15,18 @@ Environment variables:
 """
 
 from __future__ import annotations
-
 import json
 import logging
 import os
 from typing import Literal
-
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 from dotenv import load_dotenv
 load_dotenv()
-
-# ADD THIS (database import)
 from database import init_db, save_complaint
+from typing import List
 
-# ADD THIS (initialize database)
 init_db()
 
 logging.basicConfig(
@@ -43,15 +39,12 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "120"))
 
-
 Severity = Literal["Low", "Medium", "High"]
 Category = Literal["Delivery", "Product", "Payment", "Service"]
 Sentiment = Literal["Positive", "Neutral", "Negative"]
 
-
 class ComplaintRequest(BaseModel):
     complaint: str = Field(..., min_length=1, max_length=5000)
-
 
 class AnalysisResponse(BaseModel):
     summary: str
@@ -60,6 +53,14 @@ class AnalysisResponse(BaseModel):
     sentiment: Sentiment
     response: str
 
+class Complaint(BaseModel):
+    id: int
+    complaint: str
+    summary: str
+    category: str
+    severity: str
+    sentiment: str
+    response: str
 
 RESPONSE_SCHEMA = {
     "type": "object",
@@ -76,28 +77,26 @@ RESPONSE_SCHEMA = {
 SYSTEM_PROMPT = """You are an analyst for an e-commerce customer service team.
 You will receive a single customer complaint. Return a JSON object with:
 
-- summary: one or two sentences, neutral and factual, describing the issue
-- category: exactly one of "Delivery", "Product", "Payment", "Service"
-- severity: exactly one of "Low", "Medium", "High"
-- sentiment: exactly one of "Positive", "Neutral", "Negative"
-- response: a professional, empathetic two-to-four sentence reply the agent could send
+- Summary: One or two sentences, neutral and factual, describing the issue
+- Category: Exactly one of "Delivery", "Product", "Payment", "Service"
+- Severity: Exactly one of "Low", "Medium", "High"
+- Sentiment: Exactly one of "Positive", "Neutral", "Negative"
+- Response: A professional, empathetic two-to-four sentence reply the agent could send
 
 Severity guidance:
-- High: financial loss, safety risk, legal threats, repeated failures, or strong escalation language
-- Medium: significant inconvenience but recoverable in one interaction
-- Low: minor issue, easy to resolve
+- High: Financial loss, safety risk, legal threats, repeated failures, or strong escalation language
+- Medium: Significant inconvenience but recoverable in one interaction
+- Low: Minor issue, easy to resolve
 
 Category guidance:
-- Delivery: shipping, tracking, lost or late packages
-- Product: damaged, defective, wrong, or missing items
-- Payment: charges, refunds, billing errors, double-charges
-- Service: agent behavior, response quality, communication problems
+- Delivery: Shipping, tracking, lost or late packages
+- Product: Damaged, defective, wrong, or missing items
+- Payment: Charges, refunds, billing errors, double-charges
+- Service: Agent behavior, response quality, communication problems
 
 Output ONLY the JSON object. No preamble, no markdown fences, no commentary."""
 
-
 app = FastAPI(title="AI Complaint Analyzer", version="1.0.0")
-
 
 @app.get("/health")
 async def health() -> dict:
@@ -123,7 +122,6 @@ async def health() -> dict:
             "available_models": [],
             "error": str(e),
         }
-
 
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze(req: ComplaintRequest) -> AnalysisResponse:
@@ -175,7 +173,6 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
             detail=f"Model did not return valid JSON. First 200 chars: {raw[:200]}",
         )
 
-    # ADD THIS (save to database)
     save_complaint({
         "complaint": req.complaint,
         "summary": parsed["summary"],
