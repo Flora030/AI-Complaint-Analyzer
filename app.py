@@ -617,7 +617,7 @@ if not df.empty:
 # Tabs
 # ---------------------------------------------------------------------------
 tab_overview, tab_analyze, tab_bulk, tab_customers, tab_history = st.tabs(
-    ["      Overview      ", "    Analyze     ", "      Bulk      ", "      Customers     ", "      History   "]
+    ["      Overview      ", "     Analyze     ", "      Bulk      ", "     Customers     ", "     History     "]
 )
 
 # ===========================================================================
@@ -640,7 +640,6 @@ with tab_overview:
         last_7_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         recent_count  = int((df["created_dt"] >= last_7_cutoff).sum())
 
-        # Resolution stats
         resolved_df = df[df["status"] == "Resolved"]
         resolution_rate = (len(resolved_df) / total * 100) if total > 0 else 0
 
@@ -685,7 +684,6 @@ with tab_overview:
                 <div class="kpi-meta">of all tickets resolved</div>
             </div>""")
 
-        # Charts
         st.html('<div class="section"><h3>Where the noise is coming from</h3>'
                     '<span class="sub">distribution</span></div>')
 
@@ -729,7 +727,6 @@ with tab_overview:
             st.plotly_chart(style_fig(fig_sev, height=340), use_container_width=True,
                             config={"displayModeBar": False})
 
-        # Resolution outcomes chart (only show if there's data)
         res_df = df[df["resolution_success"].notna()]
         if len(res_df) > 0:
             st.html('<div class="section"><h3>Resolution outcomes</h3>'
@@ -776,7 +773,6 @@ with tab_overview:
                         st.plotly_chart(style_fig(fig_meth, height=300), use_container_width=True,
                                         config={"displayModeBar": False})
 
-        # Trend
         st.html('<div class="section"><h3>Volume over time</h3>'
                     '<span class="sub">last 30 days</span></div>')
 
@@ -802,7 +798,6 @@ with tab_overview:
         st.plotly_chart(style_fig(fig_trend, height=260), use_container_width=True,
                         config={"displayModeBar": False})
 
-        # Recent feed
         st.html('<div class="section"><h3>Most recent</h3>'
                     '<span class="sub">latest 5</span></div>')
         for c in complaints[:5]:
@@ -839,7 +834,6 @@ with tab_analyze:
     st.html('<div class="section"><h3>New complaint</h3>'
                 '<span class="sub">paste · analyze · review</span></div>')
 
-    # Customer selector
     customer_labels = ["— No customer —"] + [
         f"{c['name']}" + (f" · {c['email']}" if c['email'] else "")
         for c in customers
@@ -853,7 +847,6 @@ with tab_analyze:
     if customer_choice != customer_labels[0]:
         selected_customer = customers[customer_labels.index(customer_choice) - 1]
 
-    # Customer context preview
     if selected_customer:
         prior = fetch_customer_complaints(selected_customer["id"], limit=5)
         prior_html = ""
@@ -885,7 +878,6 @@ with tab_analyze:
         </div>
         """)
 
-    # Sample selector
     examples = {
         "Choose a sample…": "",
         "Delayed delivery": "My package has been delayed for two weeks and customer service has not "
@@ -920,17 +912,16 @@ with tab_analyze:
                     customer_id=selected_customer["id"] if selected_customer else None,
                 )
 
-            # ── FIX: clear cache immediately after a new complaint is saved ──
             fetch_all_complaints.clear()
             fetch_all_customers.clear()
 
-            st.session_state["analysis_result"]    = result
-            st.session_state["analysis_source"]    = source
-            st.session_state["analysis_complaint"] = complaint_text
-            st.session_state["analysis_id"]        = result.get("id")
-            st.session_state["analysis_customer"]  = selected_customer
+            st.session_state["analysis_result"]      = result
+            st.session_state["analysis_source"]      = source
+            st.session_state["analysis_complaint"]   = complaint_text
+            st.session_state["analysis_id"]          = result.get("id")
+            st.session_state["analysis_customer"]    = selected_customer
             st.session_state["edited_response_value"] = result.get("response", "")
-            st.session_state["email_sent_flag"]    = False
+            st.session_state["email_sent_flag"]      = False
 
             if result.get("id"):
                 with st.spinner("Finding similar past complaints…"):
@@ -939,7 +930,6 @@ with tab_analyze:
             else:
                 st.session_state["similar_complaints"] = []
 
-    # Results
     if "analysis_result" in st.session_state:
         result = st.session_state["analysis_result"]
         source = st.session_state["analysis_source"]
@@ -991,7 +981,6 @@ with tab_analyze:
                 <div class="card-body">{result.get("response","—")}</div>
             </div>""")
 
-        # Similar past complaints
         sims = st.session_state.get("similar_complaints", [])
         if sims:
             st.html('<div class="section"><h3>Similar past complaints</h3>'
@@ -1024,7 +1013,6 @@ with tab_analyze:
             st.caption("No similar past complaints found yet — either nothing in the database "
                        "is close, or the embedding model isn't pulled (`ollama pull nomic-embed-text`).")
 
-        # Review & send
         st.html('<div class="section"><h3>Review &amp; send</h3>'
                     '<span class="sub">human-in-the-loop</span></div>')
 
@@ -1036,7 +1024,6 @@ with tab_analyze:
             label_visibility="collapsed",
         )
 
-        # Resolution fields
         st.html('<div class="res-panel">'
                     '<div class="res-label">Resolution (optional — log after ticket closes)</div>')
         res_col1, res_col2 = st.columns(2)
@@ -1091,18 +1078,12 @@ with tab_analyze:
                            key="analyze_send_email"):
                 st.session_state["show_email_compose"] = True
 
-        # Email compose panel
         if st.session_state.get("show_email_compose") and cust_email and cid:
             st.html('<div class="email-panel">')
-            st.html(
-                f'<div class="card-label" style="color:{INFO}">✉ Compose email</div>'
-            )
+            st.html(f'<div class="card-label" style="color:{INFO}">✉ Compose email</div>')
             email_to_display = st.text_input(
-                "To",
-                value=cust_email,
-                key="email_to_display",
-                disabled=True,
-                label_visibility="visible",
+                "To", value=cust_email, key="email_to_display",
+                disabled=True, label_visibility="visible",
             )
             email_subject = st.text_input(
                 "Subject",
@@ -1112,8 +1093,7 @@ with tab_analyze:
             email_body = st.text_area(
                 "Body",
                 value=default_email_body(edited, cust["name"] if cust else None),
-                height=180,
-                key="email_body_analyze",
+                height=180, key="email_body_analyze",
             )
             esend_col, ecancel_col = st.columns(2)
             with esend_col:
@@ -1149,8 +1129,8 @@ with tab_bulk:
 
     st.html(
         f'<p style="color:{MUTED};font-size:14px;margin-bottom:14px">'
-        f'Drop a CSV with at least a complaints column. Optionally include a column '
-        f'with customer emails to auto-link to existing customers.</p>',
+        f'Drop a CSV with at least a complaints column. Optionally include a customer '
+        f'email column — new emails are automatically added as customers and linked.</p>',
     )
 
     uploaded = st.file_uploader(
@@ -1193,20 +1173,32 @@ with tab_bulk:
                 )
             customer_col = None if customer_col_choice == email_options[0] else customer_col_choice
 
+            # Build email→id map from existing customers
             customers_by_email = {
                 (c["email"] or "").lower().strip(): c["id"]
                 for c in customers if c["email"]
             }
+
             total_rows = len(df_upload)
             linkable = 0
+            new_customers_count = 0
             if customer_col:
-                emails = df_upload[customer_col].astype(str).str.lower().str.strip()
-                linkable = int(sum(1 for e in emails if e in customers_by_email))
+                for e in df_upload[customer_col].astype(str).str.lower().str.strip():
+                    if e and e != "nan":
+                        if e in customers_by_email:
+                            linkable += 1
+                        else:
+                            new_customers_count += 1
 
             link_msg = ""
             if customer_col:
-                link_msg = (f', linking <b style="color:{TEXT}">{linkable}</b> '
-                            f'to existing customers')
+                parts = []
+                if linkable:
+                    parts.append(f'linking <b style="color:{TEXT}">{linkable}</b> to existing customers')
+                if new_customers_count:
+                    parts.append(f'creating <b style="color:{ACCENT}">{new_customers_count}</b> new customers')
+                if parts:
+                    link_msg = ", " + " and ".join(parts)
 
             st.html(
                 f'<div style="color:{MUTED};font-size:13px;margin:14px 0">'
@@ -1220,8 +1212,9 @@ with tab_bulk:
                 type="primary", use_container_width=True, key="bulk_run",
             ):
                 progress = st.progress(0.0, text="Starting…")
-                ok, fail, linked = 0, 0, 0
+                ok_count, fail, linked, created_customers = 0, 0, 0, 0
                 first_error = None
+                bulk_results = []
 
                 for i, (_, row) in enumerate(df_upload.iterrows()):
                     text = str(row.get(complaint_col) or "").strip()
@@ -1234,9 +1227,17 @@ with tab_bulk:
                     cid = None
                     if customer_col:
                         email = str(row.get(customer_col) or "").lower().strip()
-                        cid = customers_by_email.get(email)
-                        if cid:
-                            linked += 1
+                        if email and email != "nan":
+                            cid = customers_by_email.get(email)
+                            if cid:
+                                linked += 1
+                            else:
+                                # Auto-create new customer from email
+                                new_cid = create_customer(name=email, email=email)
+                                customers_by_email[email] = new_cid
+                                cid = new_cid
+                                linked += 1
+                                created_customers += 1
 
                     try:
                         body = {"complaint": text}
@@ -1244,7 +1245,10 @@ with tab_bulk:
                             body["customer_id"] = cid
                         r = requests.post(f"{BACKEND_URL}/analyze", json=body, timeout=180)
                         if r.status_code == 200:
-                            ok += 1
+                            ok_count += 1
+                            result_data = r.json()
+                            result_data["_complaint_text"] = text
+                            bulk_results.append(result_data)
                         else:
                             fail += 1
                             if not first_error:
@@ -1261,19 +1265,23 @@ with tab_bulk:
                     progress.progress(
                         (i + 1) / total_rows,
                         text=f"Processed {i+1} of {total_rows} · "
-                             f"{ok} ok, {fail} failed",
+                             f"{ok_count} ok, {fail} failed",
                     )
 
                 progress.empty()
-                if ok:
-                    msg = f"Analyzed {ok} complaint{'s' if ok != 1 else ''}."
+                if ok_count:
+                    msg = f"Analyzed {ok_count} complaint{'s' if ok_count != 1 else ''}."
                     if linked:
-                        msg += f" Linked {linked} to existing customers."
+                        msg += f" Linked {linked} complaints to customers"
+                        if created_customers:
+                            msg += f" ({created_customers} new customer{'s' if created_customers != 1 else ''} created)"
+                        msg += "."
                     if fail:
                         msg += f" {fail} failed."
                     st.success(msg)
                     fetch_all_complaints.clear()
                     fetch_all_customers.clear()
+                    st.session_state["bulk_results"] = bulk_results
                     st.rerun()
                 else:
                     st.error(f"All {fail} complaints failed to analyze. "
@@ -1281,7 +1289,78 @@ with tab_bulk:
                     if first_error:
                         st.error(f"**First error received:** {first_error}")
 
+    # ---------------------------------------------------------------------------
+    # Bulk results display
+    # ---------------------------------------------------------------------------
+    if st.session_state.get("bulk_results"):
+        bulk_results = st.session_state["bulk_results"]
+        st.html('<div class="section"><h3>Batch results</h3>'
+                    f'<span class="sub">{len(bulk_results)} analyzed</span></div>')
+
+        for result in bulk_results:
+            cat = result.get("category", "—")
+            cat_color = CATEGORY_COLORS.get(cat, MUTED)
+            complaint_preview = (result.get("_complaint_text") or "")[:160]
+            if len(result.get("_complaint_text") or "") > 160:
+                complaint_preview += "…"
+
+            st.html(f"""
+            <div class="issue">
+                <div class="issue-meta">
+                    <span class="issue-id">#{result.get('id', 0):04d}</span>
+                    <span style="color:{cat_color}">●</span>
+                    <span>{cat}</span>
+                    <span>·</span>
+                    {severity_chip(result.get('severity', 'Low'))}
+                    {sentiment_chip(result.get('sentiment', 'Neutral'))}
+                </div>
+                <div class="issue-text">{complaint_preview}</div>
+                <div class="issue-summary">{result.get('summary', '—')}</div>
+            </div>
+            """)
+
+            with st.expander("Suggested response"):
+                st.write(result.get("response", "—"))
+
+            # Similarity search using the full complaint text
+            sim_text = result.get("_complaint_text") or result.get("summary", "")
+            sims = call_similar(sim_text, top_k=2, exclude_id=result.get("id"))
+            if sims:
+                st.html(f'<div style="margin-left:20px;margin-bottom:6px;font-size:11px;'
+                            f'font-weight:600;letter-spacing:1.2px;text-transform:uppercase;'
+                            f'color:{SUBTLE}">Similar past complaints</div>')
+                for s in sims:
+                    pct = max(0.0, min(1.0, float(s.get("similarity", 0))))
+                    cat_c = CATEGORY_COLORS.get(s["category"], MUTED)
+                    cust_bit = (f' · <span style="color:{ACCENT}">{s["customer_name"]}</span>'
+                                if s.get("customer_name") else "")
+                    st.html(f"""
+                    <div class="sim" style="margin-left:20px">
+                        <div class="issue-meta" style="margin-bottom:6px">
+                            <span class="issue-id">#{s['id']:04d}</span>
+                            <span style="color:{cat_c}">●</span>
+                            <span>{s['category']}</span>{cust_bit}
+                            <span>·</span>
+                            {severity_chip(s['severity'])}
+                            {status_chip(s['status'])}
+                            <span style="margin-left:auto" class="sim-score">{pct*100:.0f}% match</span>
+                        </div>
+                        <div class="sim-bar" style="width:{pct*100:.1f}%"></div>
+                        <div style="font-size:12px;color:{MUTED};margin-top:8px;line-height:1.5">
+                            {s['summary']}
+                        </div>
+                    </div>
+                    """)
+
+            st.html('<hr style="border:none;border-top:1px solid rgba(148,163,184,0.08);margin:8px 0 20px 0">')
+
+        if st.button("Clear batch results", key="clear_bulk_results"):
+            del st.session_state["bulk_results"]
+            st.rerun()
+
+    # ---------------------------------------------------------------------------
     # Embeddings backfill
+    # ---------------------------------------------------------------------------
     st.html('<div class="section"><h3>Embedding maintenance</h3>'
                 '<span class="sub">similarity index</span></div>')
 
@@ -1346,7 +1425,6 @@ with tab_customers:
                         float(new_ltv),
                         new_notes.strip() or None,
                     )
-                    # ── FIX: clear cache so new customer appears immediately ──
                     fetch_all_customers.clear()
                     st.toast("Customer created.", icon="✅")
                     st.rerun()
@@ -1435,7 +1513,6 @@ with tab_customers:
                                 float(e_ltv),
                                 e_notes.strip() or None,
                             )
-                            # ── FIX: clear cache so edits appear immediately ──
                             fetch_all_customers.clear()
                             st.toast("Customer updated.", icon="✅")
                             st.rerun()
@@ -1444,7 +1521,6 @@ with tab_customers:
                 if st.button("Delete", key=f"delcust_{cust['id']}",
                              use_container_width=True):
                     delete_customer(cust["id"])
-                    # ── FIX: clear cache so deletion reflects immediately ──
                     fetch_all_customers.clear()
                     fetch_all_complaints.clear()
                     st.toast("Customer deleted.", icon="🗑️")
@@ -1546,7 +1622,6 @@ with tab_history:
                 </div>
                 """)
 
-                # Resolution method display (if logged)
                 if c.get("resolution_method"):
                     st.html(
                         f'<div style="font-size:12px;color:{MUTED};margin:-8px 0 10px 0;'
@@ -1593,7 +1668,6 @@ with tab_history:
                         label_visibility="collapsed",
                     )
 
-                # Save resolution if changed
                 resolved_method = None if new_method.startswith("—") else new_method
                 resolved_success = None if new_success.startswith("—") else new_success
                 if resolved_method != c.get("resolution_method") or resolved_success != c.get("resolution_success"):
@@ -1606,7 +1680,6 @@ with tab_history:
                         st.write(c["response"])
 
                 with a5:
-                    # Email button
                     cust_email = c.get("customer_email")
                     already_sent = c.get("email_sent", False)
                     email_key = f"email_hist_{c['id']}"
@@ -1620,12 +1693,9 @@ with tab_history:
                                      help=f"Send response to {cust_email}"):
                             st.session_state[f"show_email_{c['id']}"] = True
 
-                # Inline email compose for history cards
                 if st.session_state.get(f"show_email_{c['id']}") and cust_email:
                     st.html('<div class="email-panel">')
-                    st.html(
-                        f'<div class="card-label" style="color:{INFO}">✉ Send to {cust_email}</div>'
-                    )
+                    st.html(f'<div class="card-label" style="color:{INFO}">✉ Send to {cust_email}</div>')
                     subj_key = f"esubj_{c['id']}"
                     body_key = f"ebody_{c['id']}"
                     h_subject = st.text_input(
@@ -1636,8 +1706,7 @@ with tab_history:
                     h_body = st.text_area(
                         "Body",
                         value=default_email_body(c["response"], c.get("customer_name")),
-                        height=160,
-                        key=body_key,
+                        height=160, key=body_key,
                     )
                     hs_col, hc_col = st.columns(2)
                     with hs_col:
@@ -1663,7 +1732,6 @@ with tab_history:
                             st.rerun()
                     st.html('</div>')
 
-                # Delete
                 if st.button("Delete", key=f"del_{c['id']}", use_container_width=True):
                     delete_complaint(c["id"])
                     fetch_all_complaints.clear()
