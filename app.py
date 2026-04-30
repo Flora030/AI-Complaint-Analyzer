@@ -490,7 +490,7 @@ def style_fig(fig: go.Figure, height: int = 320) -> go.Figure:
         font=dict(family="Inter, sans-serif", color=TEXT, size=12),
         margin=dict(l=10, r=10, t=20, b=10),
         height=height,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.22,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.35,
                     xanchor="center", x=0.5,
                     font=dict(size=11, color=MUTED),
                     bgcolor="rgba(0,0,0,0)"),
@@ -617,7 +617,7 @@ if not df.empty:
 # Tabs
 # ---------------------------------------------------------------------------
 tab_overview, tab_analyze, tab_bulk, tab_customers, tab_history = st.tabs(
-    ["  Overview  ", "  Analyze  ", "  Bulk  ", "  Customers  ", "  History  "]
+    ["      Overview      ", "    Analyze     ", "      Bulk      ", "      Customers     ", "      History   "]
 )
 
 # ===========================================================================
@@ -919,6 +919,11 @@ with tab_analyze:
                     complaint_text,
                     customer_id=selected_customer["id"] if selected_customer else None,
                 )
+
+            # ── FIX: clear cache immediately after a new complaint is saved ──
+            fetch_all_complaints.clear()
+            fetch_all_customers.clear()
+
             st.session_state["analysis_result"]    = result
             st.session_state["analysis_source"]    = source
             st.session_state["analysis_complaint"] = complaint_text
@@ -1067,6 +1072,7 @@ with tab_analyze:
                         "resolution_method":  None if res_method.startswith("—") else res_method,
                         "resolution_success": None if res_success.startswith("—") else res_success,
                     })
+                    fetch_all_complaints.clear()
                     st.toast("Saved.", icon="✅")
                 else:
                     st.error("No complaint ID — analysis may have come from fallback data.")
@@ -1122,6 +1128,7 @@ with tab_analyze:
                     if ok:
                         st.session_state["email_sent_flag"] = True
                         st.session_state["show_email_compose"] = False
+                        fetch_all_complaints.clear()
                         st.toast(f"Email sent to {cust_email}", icon="✉")
                         st.rerun()
                     else:
@@ -1339,6 +1346,8 @@ with tab_customers:
                         float(new_ltv),
                         new_notes.strip() or None,
                     )
+                    # ── FIX: clear cache so new customer appears immediately ──
+                    fetch_all_customers.clear()
                     st.toast("Customer created.", icon="✅")
                     st.rerun()
 
@@ -1426,6 +1435,8 @@ with tab_customers:
                                 float(e_ltv),
                                 e_notes.strip() or None,
                             )
+                            # ── FIX: clear cache so edits appear immediately ──
+                            fetch_all_customers.clear()
                             st.toast("Customer updated.", icon="✅")
                             st.rerun()
 
@@ -1433,6 +1444,9 @@ with tab_customers:
                 if st.button("Delete", key=f"delcust_{cust['id']}",
                              use_container_width=True):
                     delete_customer(cust["id"])
+                    # ── FIX: clear cache so deletion reflects immediately ──
+                    fetch_all_customers.clear()
+                    fetch_all_complaints.clear()
                     st.toast("Customer deleted.", icon="🗑️")
                     st.rerun()
 
