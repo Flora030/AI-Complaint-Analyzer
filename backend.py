@@ -6,16 +6,23 @@ Endpoints:
     POST /analyze                 Analyze a complaint, save it, and embed it
     POST /similar                 Cosine-similarity search over stored complaints
     POST /backfill_embeddings     Generate embeddings for older complaints
-                                  that predate the embedding feature
+    POST /send_email              Send response email to a customer
 
 Run:
     uvicorn backend:app --reload --port 8000
 
 Environment variables:
     OLLAMA_URL          default http://localhost:11434
-    OLLAMA_MODEL        default llama3.2          (chat / analysis model)
-    OLLAMA_EMBED_MODEL  default nomic-embed-text  (embedding model)
+    OLLAMA_MODEL        default llama3.2
+    OLLAMA_EMBED_MODEL  default nomic-embed-text
     REQUEST_TIMEOUT     default 120 (seconds)
+
+    SMTP_HOST           e.g. smtp.gmail.com
+    SMTP_PORT           default 587
+    SMTP_USER           your sending address
+    SMTP_PASS           app password or SMTP credential
+    EMAIL_FROM          display name + address, e.g. "Support <support@company.com>"
+                        (falls back to SMTP_USER if not set)
 """
 
 from __future__ import annotations
@@ -23,6 +30,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Literal
 
 import httpx
@@ -43,6 +53,7 @@ from database import (
     fetch_customer,
     fetch_customer_complaints,
     fetch_complaints_without_embeddings,
+    mark_email_sent,
 )
 
 init_db()
@@ -58,9 +69,16 @@ OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 REQUEST_TIMEOUT    = float(os.getenv("REQUEST_TIMEOUT", "120"))
 
+SMTP_HOST  = os.getenv("SMTP_HOST", "")
+SMTP_PORT  = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER  = os.getenv("SMTP_USER", "")
+SMTP_PASS  = os.getenv("SMTP_PASS", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", SMTP_USER)
+
 Severity  = Literal["Low", "Medium", "High"]
 Category  = Literal["Delivery", "Product", "Payment", "Service"]
 Sentiment = Literal["Positive", "Neutral", "Negative"]
+ResolutionSuccess = Literal["Successful", "Partial", "Unsuccessful"]
 
 
 class ComplaintRequest(BaseModel):
@@ -95,6 +113,14 @@ class SimilarComplaint(BaseModel):
     created_at: str | None
     customer_name: str | None
     similarity: float
+
+
+class SendEmailRequest(BaseModel):
+    complaint_id: int
+    to_email: str
+    to_name: str | None = None
+    subject: str
+    body: str
 
 
 RESPONSE_SCHEMA = {
@@ -140,14 +166,13 @@ Category guidance:
 Output ONLY the JSON object. No preamble, no markdown fences, no commentary."""
 
 
-app = FastAPI(title="AI Complaint Analyzer", version="2.0.0")
+app = FastAPI(title="AI Complaint Analyzer", version="2.1.0")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 def _build_customer_context(customer_id: int | None) -> str:
-    """Build a [Customer context] block to prepend to the user message."""
     if not customer_id:
         return ""
     customer = fetch_customer(customer_id)
@@ -185,7 +210,6 @@ def _build_customer_context(customer_id: int | None) -> str:
 
 
 async def _get_embedding(text: str) -> list[float] | None:
-    """Best-effort embedding via Ollama. Returns None on any failure."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
@@ -197,7 +221,6 @@ async def _get_embedding(text: str) -> list[float] | None:
             embeddings = data.get("embeddings") or []
             if embeddings and len(embeddings[0]) > 0:
                 return embeddings[0]
-            # Older endpoint shape fallback
             single = data.get("embedding")
             if single:
                 return single
@@ -205,6 +228,10 @@ async def _get_embedding(text: str) -> list[float] | None:
     except Exception as e:
         log.warning("Embedding generation failed (model=%s): %s", OLLAMA_EMBED_MODEL, e)
         return None
+
+
+def _smtp_configured() -> bool:
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +252,7 @@ async def health() -> dict:
             "model_pulled": any(m.startswith(OLLAMA_MODEL) for m in models),
             "embed_model_pulled": any(m.startswith(OLLAMA_EMBED_MODEL) for m in models),
             "available_models": models,
+            "email_configured": _smtp_configured(),
         }
     except Exception as e:
         log.warning("Ollama health check failed: %s", e)
@@ -237,6 +265,7 @@ async def health() -> dict:
             "embed_model_pulled": False,
             "available_models": [],
             "error": str(e),
+            "email_configured": _smtp_configured(),
         }
 
 
@@ -310,7 +339,6 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
     })
     parsed["id"] = complaint_id
 
-    # Best-effort embedding (don't fail the request if it errors)
     emb = await _get_embedding(req.complaint)
     if emb:
         try:
@@ -335,7 +363,6 @@ async def analyze(req: ComplaintRequest) -> AnalysisResponse:
 async def similar(req: SimilarRequest) -> list[dict]:
     emb = await _get_embedding(req.text)
     if not emb:
-        # Embedding model not available — return empty rather than 5xx
         return []
 
     query = np.asarray(emb, dtype=np.float32)
@@ -353,7 +380,6 @@ async def similar(req: SimilarRequest) -> list[dict]:
         if req.exclude_id and cid == req.exclude_id:
             continue
         if vec.size != query.size:
-            # Different embedding model dimension — skip stale vectors
             continue
         n = float(np.linalg.norm(vec))
         if n == 0:
@@ -364,7 +390,6 @@ async def similar(req: SimilarRequest) -> list[dict]:
     sims.sort(key=lambda x: -x[1])
     top = sims[: req.top_k]
 
-    # Hydrate with complaint details
     out: list[dict] = []
     for cid, score in top:
         c = fetch_complaint(cid)
@@ -409,3 +434,71 @@ async def backfill_embeddings() -> dict:
             log.warning("Failed to save embedding for %s: %s", c["id"], e)
             failed += 1
     return {"total": len(pending), "processed": processed, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# /send_email
+# ---------------------------------------------------------------------------
+@app.post("/send_email")
+async def send_email(req: SendEmailRequest) -> dict:
+    """Send a response email to a customer and mark the complaint as emailed."""
+    if not _smtp_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SMTP is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS "
+                "environment variables (or in your .env file) and restart the backend."
+            ),
+        )
+
+    # Build message
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = req.subject
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = f"{req.to_name} <{req.to_email}>" if req.to_name else req.to_email
+
+    # Plain text part
+    text_part = MIMEText(req.body, "plain")
+
+    # Basic HTML part
+    html_body = req.body.replace("\n", "<br>")
+    html_part = MIMEText(
+        f"""<html><body style="font-family:Arial,sans-serif;font-size:14px;
+            color:#222;line-height:1.6;max-width:600px;margin:40px auto;padding:0 20px">
+            <p>{html_body}</p>
+            <hr style="border:none;border-top:1px solid #eee;margin:32px 0">
+            <p style="font-size:12px;color:#888">This message was sent by our
+            Customer Support team.</p>
+        </body></html>""",
+        "html",
+    )
+
+    msg.attach(text_part)
+    msg.attach(html_part)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(EMAIL_FROM, req.to_email, msg.as_string())
+        log.info("Email sent to %s for complaint %s", req.to_email, req.complaint_id)
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(
+            status_code=502,
+            detail="SMTP authentication failed. Check your SMTP_USER and SMTP_PASS.",
+        )
+    except smtplib.SMTPException as e:
+        log.error("SMTP error sending to %s: %s", req.to_email, e)
+        raise HTTPException(status_code=502, detail=f"SMTP error: {e}")
+    except OSError as e:
+        log.error("Network error reaching SMTP host %s: %s", SMTP_HOST, e)
+        raise HTTPException(status_code=502, detail=f"Cannot reach SMTP host: {e}")
+
+    # Mark complaint as emailed
+    try:
+        mark_email_sent(req.complaint_id)
+    except Exception as e:
+        log.warning("Could not mark complaint %s as emailed: %s", req.complaint_id, e)
+
+    return {"sent": True, "to": req.to_email, "complaint_id": req.complaint_id}

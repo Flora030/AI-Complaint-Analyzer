@@ -3,7 +3,8 @@ SQLite layer for the Complaint Analyzer.
 
 Tables:
 - complaints (id, complaint, summary, category, severity, sentiment, response,
-              status, created_at, customer_id)
+              status, resolution_method, resolution_success, email_sent,
+              created_at, customer_id)
 - customers  (id, name, email, lifetime_value, notes, created_at)
 - complaint_embeddings (complaint_id PK, embedding BLOB, model)
 
@@ -54,16 +55,19 @@ def init_db() -> None:
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS complaints (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            complaint   TEXT,
-            summary     TEXT,
-            category    TEXT,
-            severity    TEXT,
-            sentiment   TEXT,
-            response    TEXT,
-            status      TEXT DEFAULT 'Needs Review',
-            created_at  TEXT,
-            customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            complaint           TEXT,
+            summary             TEXT,
+            category            TEXT,
+            severity            TEXT,
+            sentiment           TEXT,
+            response            TEXT,
+            status              TEXT DEFAULT 'Needs Review',
+            resolution_method   TEXT,
+            resolution_success  TEXT,
+            email_sent          INTEGER DEFAULT 0,
+            created_at          TEXT,
+            customer_id         INTEGER REFERENCES customers(id) ON DELETE SET NULL
         )
         """
     )
@@ -88,8 +92,14 @@ def init_db() -> None:
         cur.execute("ALTER TABLE complaints ADD COLUMN created_at TEXT")
     if "customer_id" not in cols:
         cur.execute("ALTER TABLE complaints ADD COLUMN customer_id INTEGER")
+    if "resolution_method" not in cols:
+        cur.execute("ALTER TABLE complaints ADD COLUMN resolution_method TEXT")
+    if "resolution_success" not in cols:
+        cur.execute("ALTER TABLE complaints ADD COLUMN resolution_success TEXT")
+    if "email_sent" not in cols:
+        cur.execute("ALTER TABLE complaints ADD COLUMN email_sent INTEGER DEFAULT 0")
 
-    # Backfills (ALTER TABLE doesn't apply DEFAULT to existing rows in SQLite)
+    # Backfills
     cur.execute("UPDATE complaints SET status = 'Needs Review' WHERE status IS NULL")
     cur.execute(
         "UPDATE complaints SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
@@ -110,8 +120,9 @@ def save_complaint(data: dict) -> int:
         """
         INSERT INTO complaints
             (complaint, summary, category, severity, sentiment, response,
-             status, created_at, customer_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             status, resolution_method, resolution_success, email_sent,
+             created_at, customer_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["complaint"],
@@ -121,6 +132,9 @@ def save_complaint(data: dict) -> int:
             data["sentiment"],
             data["response"],
             data.get("status", "Needs Review"),
+            data.get("resolution_method"),
+            data.get("resolution_success"),
+            int(data.get("email_sent", 0)),
             _now_iso(),
             data.get("customer_id"),
         ),
@@ -137,7 +151,8 @@ def fetch_all_complaints() -> list[dict]:
     cur.execute(
         """
         SELECT c.id, c.complaint, c.summary, c.category, c.severity, c.sentiment,
-               c.response, c.status, c.created_at, c.customer_id, cu.name
+               c.response, c.status, c.created_at, c.customer_id, cu.name,
+               c.resolution_method, c.resolution_success, c.email_sent, cu.email
         FROM complaints c
         LEFT JOIN customers cu ON c.customer_id = cu.id
         ORDER BY c.id DESC
@@ -159,6 +174,10 @@ def fetch_all_complaints() -> list[dict]:
             "created_at": r[8],
             "customer_id": r[9],
             "customer_name": r[10],
+            "resolution_method": r[11],
+            "resolution_success": r[12],
+            "email_sent": bool(r[13]),
+            "customer_email": r[14],
         }
         for r in rows
     ]
@@ -170,7 +189,8 @@ def fetch_complaint(cid: int) -> dict | None:
     cur.execute(
         """
         SELECT c.id, c.complaint, c.summary, c.category, c.severity, c.sentiment,
-               c.response, c.status, c.created_at, c.customer_id, cu.name
+               c.response, c.status, c.created_at, c.customer_id, cu.name,
+               c.resolution_method, c.resolution_success, c.email_sent, cu.email
         FROM complaints c
         LEFT JOIN customers cu ON c.customer_id = cu.id
         WHERE c.id = ?
@@ -186,6 +206,8 @@ def fetch_complaint(cid: int) -> dict | None:
         "severity": r[4], "sentiment": r[5], "response": r[6],
         "status": r[7] or "Needs Review", "created_at": r[8],
         "customer_id": r[9], "customer_name": r[10],
+        "resolution_method": r[11], "resolution_success": r[12],
+        "email_sent": bool(r[13]), "customer_email": r[14],
     }
 
 
@@ -195,12 +217,14 @@ def update_complaint(data: dict) -> None:
     cur.execute(
         """
         UPDATE complaints
-        SET complaint=?, summary=?, category=?, severity=?, sentiment=?, response=?
+        SET complaint=?, summary=?, category=?, severity=?, sentiment=?, response=?,
+            resolution_method=?, resolution_success=?
         WHERE id=?
         """,
         (
             data["complaint"], data["summary"], data["category"],
             data["severity"], data["sentiment"], data["response"],
+            data.get("resolution_method"), data.get("resolution_success"),
             data["id"],
         ),
     )
@@ -212,6 +236,29 @@ def update_status(complaint_id: int, status: str) -> None:
     conn = _conn()
     cur = conn.cursor()
     cur.execute("UPDATE complaints SET status=? WHERE id=?", (status, complaint_id))
+    conn.commit()
+    conn.close()
+
+
+def update_resolution(complaint_id: int, method: str | None,
+                       success: str | None) -> None:
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE complaints SET resolution_method=?, resolution_success=? WHERE id=?",
+        (method, success, complaint_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_email_sent(complaint_id: int) -> None:
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE complaints SET email_sent=1 WHERE id=?",
+        (complaint_id,),
+    )
     conn.commit()
     conn.close()
 
