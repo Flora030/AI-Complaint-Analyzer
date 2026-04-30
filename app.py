@@ -22,13 +22,13 @@ import streamlit as st
 
 from database import (
     init_db,
-    fetch_all_complaints,
+    fetch_all_complaints as db_fetch_all_complaints,
     update_complaint,
     update_status,
     update_resolution,
     delete_complaint,
     create_customer,
-    fetch_all_customers,
+    fetch_all_customers as db_fetch_all_customers,
     fetch_customer,
     fetch_customer_complaints,
     update_customer,
@@ -370,6 +370,18 @@ div[data-testid="stMetricValue"] {{
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+@st.cache_data(ttl=600)
+def fetch_all_complaints():
+    """Cached wrapper for db_fetch_all_complaints."""
+    return db_fetch_all_complaints()
+
+
+@st.cache_data(ttl=600)
+def fetch_all_customers():
+    """Cached wrapper for db_fetch_all_customers."""
+    return db_fetch_all_customers()
+
+
 @st.cache_data(ttl=15)
 def check_backend() -> tuple[str, str, bool]:
     try:
@@ -630,11 +642,7 @@ with tab_overview:
 
         # Resolution stats
         resolved_df = df[df["status"] == "Resolved"]
-        resolved_with_success = resolved_df[resolved_df["resolution_success"].notna()]
-        success_rate = (
-            (resolved_with_success["resolution_success"] == "Successful").mean() * 100
-            if len(resolved_with_success) > 0 else 0
-        )
+        resolution_rate = (len(resolved_df) / total * 100) if total > 0 else 0
 
         st.html('<div class="section"><h3>At a glance</h3>'
                     f'<span class="sub">{total} total · last 7 days</span></div>')
@@ -669,12 +677,12 @@ with tab_overview:
                 <div class="kpi-meta">awaiting review or in progress</div>
             </div>""")
         with k5:
-            success_color = "kpi-good" if success_rate >= 70 else ("kpi-warn" if success_rate >= 40 else "kpi-danger")
+            success_color = "kpi-good" if resolution_rate >= 70 else ("kpi-warn" if resolution_rate >= 40 else "kpi-danger")
             st.html(f"""
             <div class="kpi">
                 <div class="kpi-label">Resolution Rate</div>
-                <div class="kpi-value {success_color}">{success_rate:.0f}%</div>
-                <div class="kpi-meta">of logged resolutions marked successful</div>
+                <div class="kpi-value {success_color}">{resolution_rate:.0f}%</div>
+                <div class="kpi-meta">of all tickets resolved</div>
             </div>""")
 
         # Charts
@@ -1206,9 +1214,10 @@ with tab_bulk:
             ):
                 progress = st.progress(0.0, text="Starting…")
                 ok, fail, linked = 0, 0, 0
+                first_error = None
 
-                for i, row in enumerate(df_upload.itertuples(index=False)):
-                    text = str(getattr(row, complaint_col, "") or "").strip()
+                for i, (_, row) in enumerate(df_upload.iterrows()):
+                    text = str(row.get(complaint_col) or "").strip()
                     if not text:
                         fail += 1
                         progress.progress((i + 1) / total_rows,
@@ -1217,7 +1226,7 @@ with tab_bulk:
 
                     cid = None
                     if customer_col:
-                        email = str(getattr(row, customer_col, "") or "").lower().strip()
+                        email = str(row.get(customer_col) or "").lower().strip()
                         cid = customers_by_email.get(email)
                         if cid:
                             linked += 1
@@ -1231,8 +1240,16 @@ with tab_bulk:
                             ok += 1
                         else:
                             fail += 1
-                    except requests.RequestException:
+                            if not first_error:
+                                try:
+                                    detail = r.json().get("detail", r.text)
+                                except ValueError:
+                                    detail = r.text
+                                first_error = f"Backend returned {r.status_code}: {detail}"
+                    except requests.RequestException as e:
                         fail += 1
+                        if not first_error:
+                            first_error = f"Request failed: {e}"
 
                     progress.progress(
                         (i + 1) / total_rows,
@@ -1248,9 +1265,14 @@ with tab_bulk:
                     if fail:
                         msg += f" {fail} failed."
                     st.success(msg)
+                    fetch_all_complaints.clear()
+                    fetch_all_customers.clear()
+                    st.rerun()
                 else:
                     st.error(f"All {fail} complaints failed to analyze. "
                              f"Check that the backend and Ollama are running.")
+                    if first_error:
+                        st.error(f"**First error received:** {first_error}")
 
     # Embeddings backfill
     st.html('<div class="section"><h3>Embedding maintenance</h3>'
@@ -1530,6 +1552,7 @@ with tab_history:
                     )
                     if new_status != c["status"]:
                         update_status(c["id"], new_status)
+                        fetch_all_complaints.clear()
                         st.rerun()
 
                 with a2:
@@ -1561,6 +1584,7 @@ with tab_history:
                 resolved_success = None if new_success.startswith("—") else new_success
                 if resolved_method != c.get("resolution_method") or resolved_success != c.get("resolution_success"):
                     update_resolution(c["id"], resolved_method, resolved_success)
+                    fetch_all_complaints.clear()
                     st.rerun()
 
                 with a4:
@@ -1613,6 +1637,7 @@ with tab_history:
                                 )
                             if ok:
                                 st.session_state[f"show_email_{c['id']}"] = False
+                                fetch_all_complaints.clear()
                                 st.toast(f"Sent to {cust_email}", icon="✉")
                                 st.rerun()
                             else:
@@ -1627,4 +1652,6 @@ with tab_history:
                 # Delete
                 if st.button("Delete", key=f"del_{c['id']}", use_container_width=True):
                     delete_complaint(c["id"])
+                    fetch_all_complaints.clear()
+                    fetch_all_customers.clear()
                     st.rerun()
